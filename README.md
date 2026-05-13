@@ -6,6 +6,14 @@ The app does not modify the game install folder. It only replaces photo cache fi
 
 ## Version Notes
 
+### v1.2.0 - Compatibility Guard Update
+
+Status: current `main`
+
+- Adds a `Probe` action for checking whether the selected Heartopia photo cache still matches the supported encrypted image format.
+- Validates the selected target cache files before any backup or replacement write begins.
+- Fails closed when the cache can no longer be decrypted or parsed, instead of writing into an unsupported format.
+
 ### v1.1.0 - Safe Replace Baseline
 
 Tag: `v1.1.0`

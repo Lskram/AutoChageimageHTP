@@ -362,6 +362,54 @@ internal sealed class ReplacerApp
         return files.OrderBy(file => file.Width).ThenBy(file => file.Height).ToArray();
     }
 
+    public CacheCompatibilityResult ProbeCurrentCacheCompatibility()
+    {
+        if (!IsPhotoCache(PhotoDirectory))
+        {
+            return new CacheCompatibilityResult(
+                false,
+                "The selected folder is not a verified Heartopia Photo cache. Select the real ScreenCapture\\Photo cache first.",
+                0);
+        }
+
+        var candidates = Directory.EnumerateFiles(PhotoDirectory, "*.jpg")
+            .Where(path =>
+            {
+                var name = Path.GetFileName(path);
+                return name is not null && PhotoFileRegex.IsMatch(name);
+            })
+            .Take(5)
+            .ToArray();
+
+        if (candidates.Length == 0)
+        {
+            return new CacheCompatibilityResult(
+                false,
+                "No photo cache samples were found yet. Take a new in-game photo first, then run the compatibility probe again.",
+                0);
+        }
+
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                ValidateEncryptedPhotoFile(candidate);
+            }
+            catch (Exception ex)
+            {
+                return new CacheCompatibilityResult(
+                    false,
+                    $"Cache compatibility failed on {Path.GetFileName(candidate)}. The game cache format or encryption may have changed.\nReason: {ex.Message}",
+                    0);
+            }
+        }
+
+        return new CacheCompatibilityResult(
+            true,
+            $"Compatibility probe passed. Checked {candidates.Length} encrypted cache files in the selected Heartopia Photo cache.",
+            candidates.Length);
+    }
+
     public string ImportImage(string sourcePath)
     {
         Directory.CreateDirectory(ImageDirectory);
@@ -399,6 +447,20 @@ internal sealed class ReplacerApp
         if (targetFiles.Count == 0)
         {
             throw new InvalidOperationException($"No target files found for photo ID {targetId}.");
+        }
+
+        foreach (var file in targetFiles)
+        {
+            try
+            {
+                ValidateEncryptedPhotoFile(file.Path);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"The selected photo cache no longer matches the supported encryption or image format.\nRun the compatibility probe before replacing files.\nReason: {ex.Message}",
+                    ex);
+            }
         }
 
         var backupPath = Path.Combine(BackupDirectory, $"{targetId}_{DateTime.Now:yyyyMMdd_HHmmss}");
@@ -591,6 +653,16 @@ internal sealed class ReplacerApp
         return decryptor.TransformFinalBlock(bytes, 0, bytes.Length);
     }
 
+    private static void ValidateEncryptedPhotoFile(string path)
+    {
+        var encrypted = File.ReadAllBytes(path);
+        var plain = DecryptBytes(encrypted);
+        using var stream = new MemoryStream(plain);
+        using var image = Image.FromStream(stream, useEmbeddedColorManagement: false, validateImageData: true);
+        _ = image.Width;
+        _ = image.Height;
+    }
+
     private static byte[] ConvertToJpegBytes(string sourcePath, int width, int height, int quality)
     {
         using var source = Image.FromFile(sourcePath);
@@ -730,11 +802,20 @@ internal sealed class MainForm : Form
         var changeCache = new Button
         {
             Text = "Change Cache",
-            Location = new Point(795, 42),
-            Size = new Size(105, 28)
+            Location = new Point(865, 42),
+            Size = new Size(85, 28)
         };
         changeCache.Click += (_, _) => ChangeCache();
         Controls.Add(changeCache);
+
+        var probeCompatibility = new Button
+        {
+            Text = "Probe",
+            Location = new Point(790, 42),
+            Size = new Size(70, 28)
+        };
+        probeCompatibility.Click += (_, _) => ProbeCompatibility();
+        Controls.Add(probeCompatibility);
 
         BuildSourceGroup();
         BuildTargetGroup();
@@ -915,6 +996,17 @@ internal sealed class MainForm : Form
         _photoCacheBox.Text = _app.PhotoDirectory;
         Log($"Photo cache changed: {_app.PhotoDirectory}");
         RefreshPhotos();
+    }
+
+    private void ProbeCompatibility()
+    {
+        var result = _app.ProbeCurrentCacheCompatibility();
+        Log(result.Message);
+        MessageBox.Show(
+            result.Message,
+            result.IsCompatible ? "Compatibility OK" : "Compatibility Warning",
+            MessageBoxButtons.OK,
+            result.IsCompatible ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
     }
 
     private void ImportImage()
@@ -1136,6 +1228,8 @@ internal sealed class AppConfig
     public string? Workspace { get; set; }
     public string? PhotoDir { get; set; }
 }
+
+internal sealed record CacheCompatibilityResult(bool IsCompatible, string Message, int CheckedFileCount);
 
 internal sealed record ReplacementPlan(PhotoFile File, string BackupPath, string TempPath, byte[] EncryptedBytes);
 
