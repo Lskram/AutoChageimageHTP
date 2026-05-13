@@ -4,6 +4,18 @@ Windows tool for replacing Heartopia in-game photo cache images.
 
 The app does not modify the game install folder. It only replaces photo cache files under the current Windows user's `AppData\\LocalLow` profile after backing up the original cache files.
 
+## Version Notes
+
+### v1.1.0 - Safe Replace Baseline
+
+Tag: `v1.1.0`
+
+- Verified cache-folder selection only.
+- Backup-first replacement flow.
+- Temporary-file writes before swap.
+- Automatic rollback if replacement fails midway.
+- Build script aligned with the current framework-dependent Windows publish flow.
+
 ## Download / Run
 
 Builds are local outputs. The repo is intended to be cloneable and buildable from source.
@@ -46,6 +58,8 @@ If Windows SmartScreen warns, it is because this executable is not code-signed.
 - Encodes the image as JPG quality `98`.
 - Encrypts the JPG bytes with the same AES format used by the game cache.
 - Backs up original cache files before replacing them.
+- Only allows verified `ScreenCapture\\Photo` cache folders.
+- Writes replacement data through temporary files and restores backups automatically if a replace step fails midway.
 
 ## Build From Source
 
@@ -66,7 +80,7 @@ Build:
 dotnet build .\src\HeartopiaPhotoReplacer\HeartopiaPhotoReplacerApp.csproj -c Release
 ```
 
-Publish self-contained Windows x64 executable:
+Publish a Windows executable:
 
 ```powershell
 .\build.ps1
@@ -77,6 +91,8 @@ The published executable will be copied to:
 ```text
 dist/HeartopiaPhotoReplacer.exe
 ```
+
+The current build script publishes a framework-dependent Windows executable because the `win-x64` self-contained publish path is unstable in the local .NET SDK used for this repo.
 
 ## Notes
 

@@ -171,6 +171,29 @@ internal sealed class ReplacerApp
         return dialog.ShowDialog() == DialogResult.OK ? dialog.SelectedPath : null;
     }
 
+    public string? PromptForVerifiedPhotoCache()
+    {
+        while (true)
+        {
+            var selected = PromptForPhotoCache();
+            if (string.IsNullOrWhiteSpace(selected))
+            {
+                return null;
+            }
+
+            if (IsPhotoCache(selected))
+            {
+                return selected;
+            }
+
+            MessageBox.Show(
+                "The selected folder does not look like a Heartopia ScreenCapture\\Photo cache.\nChoose the real cache folder to avoid writing into the wrong location.",
+                "Invalid photo cache folder",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
     public string? DetectPhotoCache(bool interactive)
     {
         var caches = FindPhotoCaches().ToArray();
@@ -194,7 +217,7 @@ internal sealed class ReplacerApp
             "Photo cache not found",
             MessageBoxButtons.OK,
             MessageBoxIcon.Information);
-        return PromptForPhotoCache();
+        return PromptForVerifiedPhotoCache();
     }
 
     public IEnumerable<string> FindPhotoCaches()
@@ -362,6 +385,16 @@ internal sealed class ReplacerApp
 
     public string ReplacePhoto(string sourceImage, string targetId, Action<string> log)
     {
+        if (!File.Exists(sourceImage))
+        {
+            throw new FileNotFoundException("Replacement image was not found.", sourceImage);
+        }
+
+        if (!IsPhotoCache(PhotoDirectory))
+        {
+            throw new InvalidOperationException("The selected photo cache folder is no longer valid. Re-select the real Heartopia Photo cache before replacing files.");
+        }
+
         var targetFiles = GetFilesForPhotoId(targetId);
         if (targetFiles.Count == 0)
         {
@@ -371,20 +404,44 @@ internal sealed class ReplacerApp
         var backupPath = Path.Combine(BackupDirectory, $"{targetId}_{DateTime.Now:yyyyMMdd_HHmmss}");
         Directory.CreateDirectory(backupPath);
 
-        foreach (var file in targetFiles)
-        {
-            File.Copy(file.Path, Path.Combine(backupPath, Path.GetFileName(file.Path)), overwrite: true);
-        }
+        var plans = targetFiles.Select(file => new ReplacementPlan(
+            file,
+            Path.Combine(backupPath, Path.GetFileName(file.Path)),
+            file.Path + $".replace_{Guid.NewGuid():N}.tmp",
+            EncryptBytes(ConvertToJpegBytes(sourceImage, file.Width, file.Height, 98))))
+            .ToArray();
 
-        foreach (var file in targetFiles)
+        try
         {
-            var jpeg = ConvertToJpegBytes(sourceImage, file.Width, file.Height, 98);
-            var encrypted = EncryptBytes(jpeg);
-            File.WriteAllBytes(file.Path, encrypted);
-            log($"Replaced {Path.GetFileName(file.Path)} ({file.Width}x{file.Height}).");
-        }
+            foreach (var plan in plans)
+            {
+                File.Copy(plan.File.Path, plan.BackupPath, overwrite: true);
+            }
 
-        return backupPath;
+            foreach (var plan in plans)
+            {
+                File.WriteAllBytes(plan.TempPath, plan.EncryptedBytes);
+            }
+
+            foreach (var plan in plans)
+            {
+                File.Replace(plan.TempPath, plan.File.Path, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                log($"Replaced {Path.GetFileName(plan.File.Path)} ({plan.File.Width}x{plan.File.Height}).");
+            }
+
+            return backupPath;
+        }
+        catch (Exception ex)
+        {
+            SafeRollback(plans, log);
+            throw new InvalidOperationException(
+                $"Replace failed and the original cache files were restored from backup.\nBackup: {backupPath}\nReason: {ex.Message}",
+                ex);
+        }
+        finally
+        {
+            CleanupTemps(plans);
+        }
     }
 
     public Image? LoadPlainImagePreview(string path)
@@ -553,6 +610,43 @@ internal sealed class ReplacerApp
         using var stream = new MemoryStream();
         bitmap.Save(stream, codec, encoderParams);
         return stream.ToArray();
+    }
+
+    private static void SafeRollback(IEnumerable<ReplacementPlan> plans, Action<string> log)
+    {
+        foreach (var plan in plans)
+        {
+            try
+            {
+                if (File.Exists(plan.BackupPath))
+                {
+                    File.Copy(plan.BackupPath, plan.File.Path, overwrite: true);
+                    log($"Restored {Path.GetFileName(plan.File.Path)} from backup.");
+                }
+            }
+            catch (Exception rollbackEx)
+            {
+                log($"Rollback warning for {Path.GetFileName(plan.File.Path)}: {rollbackEx.Message}");
+            }
+        }
+    }
+
+    private static void CleanupTemps(IEnumerable<ReplacementPlan> plans)
+    {
+        foreach (var plan in plans)
+        {
+            try
+            {
+                if (File.Exists(plan.TempPath))
+                {
+                    File.Delete(plan.TempPath);
+                }
+            }
+            catch
+            {
+                // Temp cleanup must not hide the real result.
+            }
+        }
     }
 }
 
@@ -811,23 +905,10 @@ internal sealed class MainForm : Form
 
     private void ChangeCache()
     {
-        var selected = _app.PromptForPhotoCache();
+        var selected = _app.PromptForVerifiedPhotoCache();
         if (string.IsNullOrWhiteSpace(selected))
         {
             return;
-        }
-
-        if (!_app.IsPhotoCache(selected))
-        {
-            var answer = MessageBox.Show(
-                "This folder does not currently look like a Heartopia Photo cache.\nUse it anyway?",
-                "Unverified cache folder",
-                MessageBoxButtons.OKCancel,
-                MessageBoxIcon.Warning);
-            if (answer != DialogResult.OK)
-            {
-                return;
-            }
         }
 
         _app.SetPhotoDirectory(selected);
@@ -1055,6 +1136,8 @@ internal sealed class AppConfig
     public string? Workspace { get; set; }
     public string? PhotoDir { get; set; }
 }
+
+internal sealed record ReplacementPlan(PhotoFile File, string BackupPath, string TempPath, byte[] EncryptedBytes);
 
 internal sealed record PhotoFile(string Id, int Width, int Height, string Path, DateTime LastWriteTime);
 
