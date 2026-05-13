@@ -6,7 +6,9 @@ The app does not modify the game install folder. It only replaces photo cache fi
 
 ## Download / Run
 
-Use the prebuilt app:
+Builds are local outputs. The repo is intended to be cloneable and buildable from source.
+
+If you already built the app locally, the executable will be created at:
 
 ```text
 dist/HeartopiaPhotoReplacer.exe
@@ -52,6 +54,12 @@ Requirements:
 - Windows
 - .NET SDK 8 or newer
 
+Quick verify from a fresh clone:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify_repo.ps1
+```
+
 Build:
 
 ```powershell
@@ -73,6 +81,6 @@ dist/HeartopiaPhotoReplacer.exe
 ## Notes
 
 - The executable is unsigned.
+- The repository does not need the generated `.exe` committed in order to build successfully.
 - The app is designed for the Windows PC version where Heartopia stores cache files in `AppData\\LocalLow`.
 - If the game updates and changes the cache encryption or folder layout, this tool may need to be updated.
-

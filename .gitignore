@@ -1,10 +1,12 @@
 bin/
 obj/
 publish/
+dist/
 *.user
 *.suo
 .vs/
 *.log
 *.tmp
 *.cache
-
+.idea/
+.vscode/
