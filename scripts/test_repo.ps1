@@ -1,7 +1,6 @@
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
-$project = Join-Path $root "src\HeartopiaPhotoReplacer\HeartopiaPhotoReplacerApp.csproj"
 $testsProject = Join-Path $root "tests\HeartopiaPhotoReplacer.Tests\HeartopiaPhotoReplacer.Tests.csproj"
 
 function Invoke-Dotnet {
@@ -16,9 +15,7 @@ function Invoke-Dotnet {
     }
 }
 
-Invoke-Dotnet @('restore', $project)
 Invoke-Dotnet @('restore', $testsProject)
-Invoke-Dotnet @('build', $project, '-c', 'Release', '--no-restore')
 Invoke-Dotnet @('run', '--project', $testsProject, '-c', 'Release', '--no-restore')
 
-Write-Host "dotnet restore/build/tests passed"
+Write-Host "Automated tests passed"

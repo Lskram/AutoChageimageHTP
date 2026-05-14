@@ -1,0 +1,19 @@
+End User Notice
+===============
+
+This software is provided as-is for managing local Heartopia photo cache files.
+
+Key limits:
+- it is intended for the Windows PC version only
+- it only targets cache files under AppData\LocalLow
+- it does not patch or modify the game install folder
+- compatibility can change after a game update
+
+The user is responsible for:
+- confirming the selected cache folder is correct
+- keeping backups
+- stopping use when the compatibility probe fails
+- reviewing game policy and platform terms before distribution or commercial use
+
+No warranty is provided that every future Heartopia update will remain
+compatible with this tool without review or maintenance.

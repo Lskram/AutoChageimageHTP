@@ -1,0 +1,16 @@
+Heartopia Photo Replacer Notice
+================================
+
+This tool only replaces Heartopia photo cache files stored under the current
+Windows user's AppData\LocalLow profile.
+
+It does not modify the game install folder.
+
+Before replacing cache files:
+- run the compatibility probe
+- keep backups
+- stop immediately if the probe fails
+- review the current build again after every game update
+
+If the game changes its cache format or encryption, replacement should be
+considered unsupported until the tool is reviewed and updated.
