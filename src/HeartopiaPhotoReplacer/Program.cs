@@ -1197,6 +1197,7 @@ internal sealed class MainForm : Form
     public MainForm(ReplacerApp app)
     {
         _app = app;
+        Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? Icon;
         BuildUi();
     }
 
