@@ -35,9 +35,9 @@ internal static class Program
 
 internal sealed class ReplacerApp
 {
-    private static readonly Regex PhotoFileRegex = new(@"^(\d+)_(\d+)_(\d+)\.jpg$", RegexOptions.Compiled);
-    private static readonly Regex BackupSnapshotRegex = new(@"^(\d+)_\d{8}_\d{6}$", RegexOptions.Compiled);
-    private static readonly Regex RestorePointRegex = new(@"^restorepoint_(\d+)_\d{8}_\d{6}$", RegexOptions.Compiled);
+    private static readonly Regex PhotoFileRegex = new(@"^(.+)_(\d+)_(\d+)\.jpg$", RegexOptions.Compiled);
+    private static readonly Regex BackupSnapshotRegex = new(@"^(.+)_\d{8}_\d{6}$", RegexOptions.Compiled);
+    private static readonly Regex RestorePointRegex = new(@"^restorepoint_(.+)_\d{8}_\d{6}$", RegexOptions.Compiled);
     private const int DefaultBackupRetentionCount = 20;
     private const int DefaultBackupRetentionDays = 30;
     private const int RestorePointRetentionCount = 10;
@@ -311,8 +311,8 @@ internal sealed class ReplacerApp
         {
             return Directory.EnumerateFiles(path)
                 .Select(Path.GetFileName)
-                .Any(name => name is not null &&
-                             Regex.IsMatch(name, @"^\d+_(256_144|512_288|1564_880|1920_1080|400_400)\.jpg$"));
+                .Any(name => TryParsePhotoFileName(name, out _, out var width, out var height)
+                             && IsKnownPhotoCacheSize(width, height));
         }
         catch
         {
@@ -350,17 +350,15 @@ internal sealed class ReplacerApp
         var items = new List<PhotoFile>();
         foreach (var file in Directory.EnumerateFiles(PhotoDirectory, "*.jpg"))
         {
-            var name = Path.GetFileName(file);
-            var match = PhotoFileRegex.Match(name);
-            if (!match.Success)
+            if (!TryParsePhotoFileName(Path.GetFileName(file), out var id, out var width, out var height))
             {
                 continue;
             }
 
             items.Add(new PhotoFile(
-                match.Groups[1].Value,
-                int.Parse(match.Groups[2].Value),
-                int.Parse(match.Groups[3].Value),
+                id,
+                width,
+                height,
                 file,
                 File.GetLastWriteTime(file)));
         }
@@ -385,19 +383,18 @@ internal sealed class ReplacerApp
         }
 
         var files = new List<PhotoFile>();
-        foreach (var file in Directory.EnumerateFiles(PhotoDirectory, $"{id}_*.jpg"))
+        foreach (var file in Directory.EnumerateFiles(PhotoDirectory, "*.jpg"))
         {
-            var name = Path.GetFileName(file);
-            var match = PhotoFileRegex.Match(name);
-            if (!match.Success || match.Groups[1].Value != id)
+            if (!TryParsePhotoFileName(Path.GetFileName(file), out var fileId, out var width, out var height)
+                || !string.Equals(fileId, id, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
             files.Add(new PhotoFile(
                 id,
-                int.Parse(match.Groups[2].Value),
-                int.Parse(match.Groups[3].Value),
+                width,
+                height,
                 file,
                 File.GetLastWriteTime(file)));
         }
@@ -412,13 +409,15 @@ internal sealed class ReplacerApp
             return [];
         }
 
-        return Directory.GetDirectories(BackupDirectory, $"{id}_*")
+        return Directory.GetDirectories(BackupDirectory)
             .Select(path => new DirectoryInfo(path))
             .Where(dir => !dir.Name.StartsWith("restorepoint_", StringComparison.OrdinalIgnoreCase))
+            .Where(dir => TryParseBackupSnapshotName(dir.Name, out var snapshotId)
+                          && string.Equals(snapshotId, id, StringComparison.OrdinalIgnoreCase))
             .Where(dir => dir.EnumerateFiles("*.jpg").Any(file =>
             {
-                var match = PhotoFileRegex.Match(file.Name);
-                return match.Success && match.Groups[1].Value == id;
+                return TryParsePhotoFileName(file.Name, out var fileId, out _, out _)
+                       && string.Equals(fileId, id, StringComparison.OrdinalIgnoreCase);
             }))
             .OrderByDescending(dir => dir.Name)
             .Select(dir => new BackupSnapshot(dir.Name, dir.FullName, dir.LastWriteTime))
@@ -445,7 +444,8 @@ internal sealed class ReplacerApp
 
         var snapshotsByPhotoId = directories
             .Select(dir => new { Directory = dir, Match = BackupSnapshotRegex.Match(dir.Name) })
-            .Where(item => item.Match.Success)
+            .Where(item => item.Match.Success
+                           && !item.Directory.Name.StartsWith("restorepoint_", StringComparison.OrdinalIgnoreCase))
             .GroupBy(item => item.Match.Groups[1].Value, StringComparer.OrdinalIgnoreCase);
 
         foreach (var group in snapshotsByPhotoId)
@@ -531,11 +531,8 @@ internal sealed class ReplacerApp
         }
 
         var candidates = Directory.EnumerateFiles(PhotoDirectory, "*.jpg")
-            .Where(path =>
-            {
-                var name = Path.GetFileName(path);
-                return name is not null && PhotoFileRegex.IsMatch(name);
-            })
+            .Where(path => TryParsePhotoFileName(Path.GetFileName(path), out _, out _, out _))
+            .OrderByDescending(File.GetLastWriteTime)
             .Take(5)
             .ToArray();
 
@@ -607,11 +604,13 @@ internal sealed class ReplacerApp
             throw new InvalidOperationException($"No target files found for photo ID {targetId}.");
         }
 
+        var validatedTargetFiles = new List<PhotoFile>();
         foreach (var file in targetFiles)
         {
             try
             {
-                ValidateEncryptedPhotoFileMatchesName(file.Path);
+                var actualSize = ValidateEncryptedPhotoFile(file.Path);
+                validatedTargetFiles.Add(file with { Width = actualSize.Width, Height = actualSize.Height });
             }
             catch (Exception ex)
             {
@@ -624,16 +623,16 @@ internal sealed class ReplacerApp
         var backupPath = Path.Combine(BackupDirectory, $"{targetId}_{DateTime.Now:yyyyMMdd_HHmmss}");
         Directory.CreateDirectory(backupPath);
 
-        var plans = targetFiles.Select(file => new ReplacementPlan(
+        var plans = validatedTargetFiles.Select(file => new ReplacementPlan(
             file,
             Path.Combine(backupPath, Path.GetFileName(file.Path)),
             file.Path + $".replace_{Guid.NewGuid():N}.tmp",
             EncryptBytes(ConvertToJpegBytes(sourceImage, file.Width, file.Height, 98))))
             .ToArray();
 
-        EnsureWritableFiles(targetFiles.Select(file => file.Path), "replace");
+        EnsureWritableFiles(validatedTargetFiles.Select(file => file.Path), "replace");
         EnsureAvailableFreeSpace(
-            new StorageRequirement(BackupDirectory, targetFiles.Sum(file => new FileInfo(file.Path).Length), "backup storage"),
+            new StorageRequirement(BackupDirectory, validatedTargetFiles.Sum(file => new FileInfo(file.Path).Length), "backup storage"),
             new StorageRequirement(PhotoDirectory, plans.Sum(plan => (long)plan.EncryptedBytes.Length), "temporary cache writes"));
 
         try
@@ -651,7 +650,7 @@ internal sealed class ReplacerApp
             foreach (var plan in plans)
             {
                 File.Replace(plan.TempPath, plan.File.Path, destinationBackupFileName: null, ignoreMetadataErrors: true);
-                ValidateEncryptedPhotoFileMatchesName(plan.File.Path);
+                ValidateEncryptedPhotoFileSize(plan.File.Path, plan.File.Width, plan.File.Height);
                 log($"Replaced {Path.GetFileName(plan.File.Path)} ({plan.File.Width}x{plan.File.Height}).");
             }
 
@@ -699,11 +698,8 @@ internal sealed class ReplacerApp
         var snapshot = new DirectoryInfo(backupDirectoryPath);
 
         var backupFiles = Directory.EnumerateFiles(snapshot.FullName, "*.jpg")
-            .Where(path =>
-            {
-                var match = PhotoFileRegex.Match(Path.GetFileName(path));
-                return match.Success && match.Groups[1].Value == targetId;
-            })
+            .Where(path => TryParsePhotoFileName(Path.GetFileName(path), out var fileId, out _, out _)
+                           && string.Equals(fileId, targetId, StringComparison.OrdinalIgnoreCase))
             .OrderBy(path => path)
             .ToArray();
 
@@ -712,19 +708,14 @@ internal sealed class ReplacerApp
             throw new InvalidOperationException($"Backup folder {snapshot.Name} does not contain any matching photo cache files.");
         }
 
-        foreach (var backupFile in backupFiles)
-        {
-            ValidateEncryptedPhotoFileMatchesName(backupFile);
-        }
-
         var restorePlans = backupFiles.Select(path =>
         {
-            var (_, width, height) = ParsePhotoFileName(path);
+            var size = ValidateEncryptedPhotoFile(path);
             var destinationPath = Path.Combine(PhotoDirectory, Path.GetFileName(path));
             return new RestorePlan(
                 targetId,
-                width,
-                height,
+                size.Width,
+                size.Height,
                 path,
                 destinationPath,
                 destinationPath + $".restore_{Guid.NewGuid():N}.tmp",
@@ -764,7 +755,7 @@ internal sealed class ReplacerApp
                     File.Move(plan.TempPath, plan.DestinationPath);
                 }
 
-                ValidateEncryptedPhotoFileMatchesName(plan.DestinationPath);
+                ValidateEncryptedPhotoFileSize(plan.DestinationPath, plan.Width, plan.Height);
                 log($"Restored {Path.GetFileName(plan.DestinationPath)} from {snapshot.Name}.");
             }
 
@@ -942,13 +933,6 @@ internal sealed class ReplacerApp
         return new Size(image.Width, image.Height);
     }
 
-    private static void ValidateEncryptedPhotoFileMatchesName(string path)
-    {
-        var (_, width, height) = ParsePhotoFileName(path);
-        var size = ValidateEncryptedPhotoFile(path);
-        EnsureExpectedSize(size, width, height, Path.GetFileName(path));
-    }
-
     internal static byte[] EncodeReplacementImageForCache(string sourcePath, int width, int height, int quality = 98)
     {
         return EncryptBytes(ConvertToJpegBytes(sourcePath, width, height, quality));
@@ -1058,27 +1042,82 @@ internal sealed class ReplacerApp
         }
     }
 
-    private static void EnsureExpectedSize(Size actual, int expectedWidth, int expectedHeight, string label)
+    private static void ValidateEncryptedPhotoFileSize(string path, int expectedWidth, int expectedHeight)
     {
+        var actual = ValidateEncryptedPhotoFile(path);
         if (actual.Width != expectedWidth || actual.Height != expectedHeight)
         {
             throw new InvalidOperationException(
-                $"{label} produced {actual.Width}x{actual.Height}, expected {expectedWidth}x{expectedHeight}.");
+                $"{Path.GetFileName(path)} produced {actual.Width}x{actual.Height}, expected {expectedWidth}x{expectedHeight}.");
         }
     }
 
     private static (string Id, int Width, int Height) ParsePhotoFileName(string path)
     {
-        var match = PhotoFileRegex.Match(Path.GetFileName(path));
-        if (!match.Success)
+        if (!TryParsePhotoFileName(Path.GetFileName(path), out var id, out var width, out var height))
         {
             throw new InvalidOperationException($"Unsupported cache file name: {Path.GetFileName(path)}");
         }
 
-        return (
-            match.Groups[1].Value,
-            int.Parse(match.Groups[2].Value),
-            int.Parse(match.Groups[3].Value));
+        return (id, width, height);
+    }
+
+    private static bool TryParsePhotoFileName(string? fileName, out string id, out int width, out int height)
+    {
+        id = string.Empty;
+        width = 0;
+        height = 0;
+
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return false;
+        }
+
+        var match = PhotoFileRegex.Match(fileName);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        if (!int.TryParse(match.Groups[2].Value, out width) || !int.TryParse(match.Groups[3].Value, out height))
+        {
+            width = 0;
+            height = 0;
+            return false;
+        }
+
+        if (width <= 0 || height <= 0)
+        {
+            width = 0;
+            height = 0;
+            return false;
+        }
+
+        id = match.Groups[1].Value;
+        return !string.IsNullOrWhiteSpace(id);
+    }
+
+    private static bool TryParseBackupSnapshotName(string directoryName, out string id)
+    {
+        id = string.Empty;
+        var match = BackupSnapshotRegex.Match(directoryName);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        id = match.Groups[1].Value;
+        return !string.IsNullOrWhiteSpace(id);
+    }
+
+    private static bool IsKnownPhotoCacheSize(int width, int height)
+    {
+        return (width, height) is
+            (256, 144) or
+            (512, 288) or
+            (1564, 880) or
+            (1920, 1080) or
+            (400, 400);
     }
 
     private static void EnsureWritableFiles(IEnumerable<string> paths, string operationName)

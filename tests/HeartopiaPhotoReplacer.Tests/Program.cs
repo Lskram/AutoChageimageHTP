@@ -41,6 +41,10 @@ internal static class Program
             const string photoId = "123456789012345678";
             CreateEncryptedPhotoCache(photoCache, photoId, originalImage, 256, 144);
             CreateEncryptedPhotoCache(photoCache, photoId, originalImage, 512, 288);
+            CreateEncryptedPhotoCache(photoCache, photoId, originalImage, 1920, 1080, 1452, 817);
+
+            const string newFormatPhotoId = "normal+tvn5qeg+TakePhoto+134160780319712106.png";
+            CreateEncryptedPhotoCache(photoCache, newFormatPhotoId, originalImage, 256, 144);
 
             var app = new ReplacerApp(configRoot);
             app.SetWorkspace(workspace);
@@ -48,13 +52,14 @@ internal static class Program
             app.UpdateBackupPolicy(1, 30);
 
             Assert(app.IsPhotoCache(photoCache), "Expected generated cache directory to be recognized.");
-            Assert(app.GetPhotoGroups().Count == 1, "Expected one generated photo group.");
+            Assert(app.GetPhotoGroups().Count == 2, "Expected two generated photo groups.");
+            Assert(app.GetFilesForPhotoId(newFormatPhotoId).Count == 1, "Expected the new filename format to be grouped by its full prefix.");
 
             var probe = app.ProbeCurrentCacheCompatibility();
             Assert(probe.IsCompatible, $"Expected compatibility probe to pass, got: {probe.Message}");
 
             var targetFiles = app.GetFilesForPhotoId(photoId);
-            Assert(targetFiles.Count == 2, "Expected two target cache files.");
+            Assert(targetFiles.Count == 3, "Expected three target cache files.");
 
             var originalBytes = targetFiles.ToDictionary(
                 item => Path.GetFileName(item.Path),
@@ -67,6 +72,16 @@ internal static class Program
             var updatedBytes = File.ReadAllBytes(targetFiles[0].Path);
             Assert(!updatedBytes.SequenceEqual(originalBytes[Path.GetFileName(targetFiles[0].Path)]), "Expected replacement to change cache bytes.");
             Assert(app.GetBackupsForPhotoId(photoId).Count == 1, "Expected one backup snapshot after replacement.");
+
+            using (var mismatchedPreview = app.LoadEncryptedImagePreview(Path.Combine(photoCache, $"{photoId}_1920_1080.jpg")))
+            {
+                Assert(mismatchedPreview is not null, "Expected mismatched-name cache preview to load after replacement.");
+                Assert(mismatchedPreview!.Width == 1452 && mismatchedPreview.Height == 817, "Expected replacement to preserve the actual decrypted cache size, not the size in the filename.");
+            }
+
+            var newFormatBackupPath = app.ReplacePhoto(replacementImage, newFormatPhotoId, _ => { });
+            Assert(Directory.Exists(newFormatBackupPath), "Expected replacement to support the new cache filename format.");
+            Assert(app.GetBackupsForPhotoId(newFormatPhotoId).Count == 1, "Expected a backup snapshot for the new filename format.");
 
             var restoredPath = app.RestoreLatestBackup(photoId, _ => { });
             Assert(string.Equals(restoredPath, backupPath, StringComparison.OrdinalIgnoreCase), "Expected latest restore to use the first backup snapshot.");
@@ -106,10 +121,20 @@ internal static class Program
         bitmap.Save(path);
     }
 
-    private static void CreateEncryptedPhotoCache(string photoCache, string photoId, string sourceImage, int width, int height)
+    private static void CreateEncryptedPhotoCache(
+        string photoCache,
+        string photoId,
+        string sourceImage,
+        int fileNameWidth,
+        int fileNameHeight,
+        int? actualWidth = null,
+        int? actualHeight = null)
     {
-        var encrypted = ReplacerApp.EncodeReplacementImageForCache(sourceImage, width, height);
-        File.WriteAllBytes(Path.Combine(photoCache, $"{photoId}_{width}_{height}.jpg"), encrypted);
+        var encrypted = ReplacerApp.EncodeReplacementImageForCache(
+            sourceImage,
+            actualWidth ?? fileNameWidth,
+            actualHeight ?? fileNameHeight);
+        File.WriteAllBytes(Path.Combine(photoCache, $"{photoId}_{fileNameWidth}_{fileNameHeight}.jpg"), encrypted);
     }
 
     private static void CreateSnapshotDirectory(string backupRoot, string directoryName, IEnumerable<string> sourceFiles, DateTime lastWriteTime)
